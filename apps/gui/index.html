@@ -1,0 +1,33 @@
+<!doctype html>
+<html>
+  <head>
+    <meta charset="utf-8" />
+    <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline';">
+    <title>Summarize — Playlist Extractor</title>
+    <style>
+      body { font-family: system-ui,Segoe UI,Arial; margin: 12px; }
+      label { display:block; margin-top:8px }
+      input[type=text] { width:100%; padding:8px; box-sizing:border-box }
+      textarea { width:100%; height:220px; margin-top:8px; white-space:pre-wrap }
+      button { margin-top:8px; padding:8px 12px }
+    </style>
+  </head>
+  <body>
+    <h3>Summarize — Playlist Extractor</h3>
+    <label>Enter YouTube video or playlist URL</label>
+    <input id="url" type="text" placeholder="https://www.youtube.com/watch?v=..." />
+
+    <label>Output folder (will create outputs/ inside this)</label>
+    <input id="outdir" type="text" placeholder="Optional (default: project folder)" />
+
+    <div>
+      <button id="start">Start</button>
+      <button id="cancel">Close</button>
+    </div>
+
+    <label>Output</label>
+    <textarea id="log" readonly></textarea>
+
+    <script src="renderer.js"></script>
+  </body>
+</html>
