@@ -190,8 +190,8 @@ class GymBroApp:
     def _run_extractor(self, node, extractor, url, cwd):
         try:
             self.process = subprocess.Popen(
-                [node, extractor, url],
-                cwd=cwd,
+                [node, extractor, url, "--output", cwd],
+                cwd=os.path.dirname(os.path.dirname(extractor)),
                 stdout=subprocess.PIPE,
                 stderr=subprocess.STDOUT,
                 text=True,

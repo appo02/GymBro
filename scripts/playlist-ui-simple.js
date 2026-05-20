@@ -24,7 +24,7 @@ function ask(question) {
 
     const node = process.execPath || 'node';
     const script = path.join(process.cwd(), 'scripts', 'playlist-extract.js');
-    const child = spawn(node, [script, url], { stdio: 'inherit', cwd: resolved });
+    const child = spawn(node, [script, url, '--output', resolved], { stdio: 'inherit' });
     child.on('close', (code) => process.exit(code || 0));
   } catch (err) {
     console.error('Error:', err && err.message ? err.message : err);

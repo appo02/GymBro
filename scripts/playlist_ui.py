@@ -57,7 +57,7 @@ def main():
     print(f"Running extractor for: {url}")
     print(f"Saving outputs under: {os.path.join(outdir, 'outputs')}")
 
-    proc = subprocess.Popen([node, str(extractor), url], cwd=outdir)
+    proc = subprocess.Popen([node, str(extractor), url, '--output', outdir])
     try:
         proc.wait()
     except KeyboardInterrupt:

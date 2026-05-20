@@ -2,9 +2,14 @@
 import { spawnSync, spawn } from 'child_process';
 import fs from 'fs';
 import path from 'path';
+import { fileURLToPath } from 'url';
+
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = path.dirname(__filename);
+const PROJECT_ROOT = path.resolve(__dirname, '..');
 
 function findYtDlp() {
-  const local = path.join(process.cwd(), 'yt-dlp.exe');
+  const local = path.join(PROJECT_ROOT, 'yt-dlp.exe');
   try {
     if (fs.existsSync(local)) return local;
   } catch {}
@@ -88,10 +93,11 @@ function uniqueFilePath(dir, baseName, ext) {
 }
 
 function runCliForVideo(videoUrl) {
-  // run the built CLI in dist/cli.js
+  // run the built CLI using absolute path from project root
   const nodePath = process.execPath || 'node';
-  const args = [path.join('dist', 'cli.js'), videoUrl, '--extract', '--timestamps'];
-  const res = spawnSync(nodePath, args, { encoding: 'utf8', maxBuffer: 64 * 1024 * 1024 });
+  const cliPath = path.join(PROJECT_ROOT, 'dist', 'cli.js');
+  const args = [cliPath, videoUrl, '--extract', '--timestamps'];
+  const res = spawnSync(nodePath, args, { cwd: PROJECT_ROOT, encoding: 'utf8', maxBuffer: 64 * 1024 * 1024 });
   if (res.error) throw res.error;
   if (res.status !== 0) throw new Error(res.stderr || `CLI failed for ${videoUrl}`);
   return res.stdout;
@@ -100,10 +106,26 @@ function runCliForVideo(videoUrl) {
 async function main() {
   const argv = process.argv.slice(2);
   if (argv.length === 0) {
-    console.error('Usage: node scripts/playlist-extract.js <playlist-or-video-url>');
+    console.error('Usage: node scripts/playlist-extract.js <playlist-or-video-url> [--output <dir>]');
     process.exit(2);
   }
-  const inputUrl = argv[0];
+
+  // Parse args: first positional is URL, optional --output <dir>
+  let inputUrl = null;
+  let outputBase = null;
+  for (let i = 0; i < argv.length; i++) {
+    if (argv[i] === '--output' && argv[i + 1]) {
+      outputBase = argv[++i];
+    } else if (!inputUrl) {
+      inputUrl = argv[i];
+    }
+  }
+  if (!inputUrl) {
+    console.error('No URL provided');
+    process.exit(2);
+  }
+  // Default output base to project root
+  const outputRoot = outputBase ? path.resolve(outputBase) : PROJECT_ROOT;
   const ytDlp = findYtDlp();
 
   let info = null;
@@ -124,7 +146,7 @@ async function main() {
     baseDirName = inputUrl.replace(/[:\\/?#&=]/g, '-');
   }
 
-  const baseDir = path.join(process.cwd(), 'outputs', sanitizeName(baseDirName));
+  const baseDir = path.join(outputRoot, 'outputs', sanitizeName(baseDirName));
   ensureDir(baseDir);
 
   // combined transcripts file for the whole playlist/video

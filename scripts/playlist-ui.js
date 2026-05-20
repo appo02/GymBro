@@ -32,7 +32,7 @@ async function main() {
 
   const node = process.execPath || 'node';
   const script = path.join(process.cwd(), 'scripts', 'playlist-extract.js');
-  const child = spawn(node, [script, url], { stdio: 'inherit', cwd: resolved });
+  const child = spawn(node, [script, url, '--output', resolved], { stdio: 'inherit' });
   child.on('close', (code) => {
     if (code === 0) process.exit(0);
     console.error(`Extractor exited with code ${code}`);
