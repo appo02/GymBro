@@ -92,15 +92,134 @@ function uniqueFilePath(dir, baseName, ext) {
   return candidate;
 }
 
-function runCliForVideo(videoUrl) {
-  // run the built CLI using absolute path from project root
-  const nodePath = process.execPath || 'node';
-  const cliPath = path.join(PROJECT_ROOT, 'dist', 'cli.js');
-  const args = [cliPath, videoUrl, '--extract', '--timestamps'];
-  const res = spawnSync(nodePath, args, { cwd: PROJECT_ROOT, encoding: 'utf8', maxBuffer: 64 * 1024 * 1024 });
+function parseVtt(vttContent) {
+  // Parse WebVTT into timestamped text lines
+  const lines = vttContent.split(/\r?\n/);
+  const segments = [];
+  let i = 0;
+
+  while (i < lines.length) {
+    const timeMatch = lines[i].match(/^(\d{2}:\d{2}:\d{2}\.\d{3})\s*-->\s*(\d{2}:\d{2}:\d{2}\.\d{3})/);
+    if (timeMatch) {
+      const startTime = timeMatch[1];
+      i++;
+      let text = '';
+      while (i < lines.length && lines[i].trim() !== '') {
+        const cleaned = lines[i].replace(/<[^>]+>/g, '').replace(/&amp;/g, '&').replace(/&lt;/g, '<').replace(/&gt;/g, '>').trim();
+        if (cleaned) text += (text ? ' ' : '') + cleaned;
+        i++;
+      }
+      if (text) {
+        segments.push({ time: formatTimestamp(startTime), text });
+      }
+    } else {
+      i++;
+    }
+  }
+
+  // Deduplicate progressive reveals in auto-subs
+  const deduped = [];
+  for (let j = 0; j < segments.length; j++) {
+    const curr = segments[j];
+    const next = segments[j + 1];
+    if (next && next.text.startsWith(curr.text)) continue;
+    if (deduped.length > 0 && curr.text.startsWith(deduped[deduped.length - 1].text)) {
+      deduped[deduped.length - 1] = curr;
+    } else if (deduped.length === 0 || deduped[deduped.length - 1].text !== curr.text) {
+      deduped.push(curr);
+    }
+  }
+  return deduped;
+}
+
+function parseJson3(json3Content) {
+  // Parse YouTube json3 subtitle format — gives clean non-overlapping segments
+  const data = JSON.parse(json3Content);
+  const events = (data.events || []).filter(e => e.segs && e.segs.length > 0);
+  const segments = [];
+
+  for (const event of events) {
+    const startMs = event.tStartMs || 0;
+    const text = event.segs.map(s => s.utf8 || '').join('').trim();
+    if (!text || text === '\n') continue;
+    const cleaned = text.replace(/\n/g, ' ').trim();
+    if (cleaned) {
+      segments.push({ time: formatMs(startMs), text: cleaned });
+    }
+  }
+  return segments;
+}
+
+function formatMs(ms) {
+  const totalSec = Math.floor(ms / 1000);
+  const hours = Math.floor(totalSec / 3600);
+  const minutes = Math.floor((totalSec % 3600) / 60);
+  const seconds = totalSec % 60;
+  if (hours > 0) return `[${hours}:${String(minutes).padStart(2, '0')}:${String(seconds).padStart(2, '0')}]`;
+  return `[${minutes}:${String(seconds).padStart(2, '0')}]`;
+}
+
+function formatTimestamp(vttTime) {
+  // Convert 00:01:23.456 -> [01:23] or [1:01:23] for hour+ videos
+  const parts = vttTime.split(':');
+  const hours = parseInt(parts[0], 10);
+  const minutes = parseInt(parts[1], 10);
+  const seconds = parseInt(parts[2].split('.')[0], 10);
+  if (hours > 0) return `[${hours}:${String(minutes).padStart(2, '0')}:${String(seconds).padStart(2, '0')}]`;
+  return `[${minutes}:${String(seconds).padStart(2, '0')}]`;
+}
+
+function extractTranscript(ytDlpPath, videoUrl, tempDir) {
+  // Clean temp dir for this video
+  const existingFiles = fs.existsSync(tempDir) ? fs.readdirSync(tempDir) : [];
+  for (const f of existingFiles) {
+    if (f.startsWith('sub_temp')) try { fs.unlinkSync(path.join(tempDir, f)); } catch {}
+  }
+
+  const tempBase = path.join(tempDir, 'sub_temp');
+
+  // Try json3 first (clean non-overlapping segments), fall back to vtt
+  const args = [
+    '--write-subs', '--write-auto-subs',
+    '--sub-langs', 'en.*,en',
+    '--sub-format', 'json3',
+    '--skip-download',
+    '--no-playlist',
+    '-o', tempBase,
+    videoUrl
+  ];
+
+  const res = spawnSync(ytDlpPath, args, { encoding: 'utf8', timeout: 120000 });
   if (res.error) throw res.error;
-  if (res.status !== 0) throw new Error(res.stderr || `CLI failed for ${videoUrl}`);
-  return res.stdout;
+
+  // Find downloaded subtitle files
+  const files = fs.readdirSync(tempDir).filter(f => f.startsWith('sub_temp'));
+  const json3File = files.find(f => f.endsWith('.json3'));
+  const vttFile = files.find(f => f.endsWith('.vtt'));
+
+  let segments;
+  if (json3File) {
+    const content = fs.readFileSync(path.join(tempDir, json3File), 'utf8');
+    segments = parseJson3(content);
+  } else if (vttFile) {
+    const content = fs.readFileSync(path.join(tempDir, vttFile), 'utf8');
+    segments = parseVtt(content);
+  } else {
+    throw new Error('No subtitles/transcript available for this video');
+  }
+
+  // Clean up temp files
+  for (const f of files) {
+    try { fs.unlinkSync(path.join(tempDir, f)); } catch {}
+  }
+
+  if (segments.length === 0) throw new Error('Transcript was empty');
+  return segments.map(s => `${s.time} ${s.text}`).join('\n');
+}
+
+function getTranscriptForVideo(ytDlpPath, videoUrl, tempDir) {
+  ensureDir(tempDir);
+  return extractTranscript(ytDlpPath, videoUrl, tempDir);
 }
 
 async function main() {
@@ -159,9 +278,10 @@ async function main() {
     const title = info.title || info.fulltitle || info.id || 'video';
     const safe = sanitizeName(title) || info.id || 'video';
     const filePath = path.join(baseDir, `${safe}.txt`);
+    const tempDir = path.join(baseDir, '.tmp');
     console.log(`Processing single video: ${title}`);
     try {
-      const out = runCliForVideo(inputUrl);
+      const out = getTranscriptForVideo(ytDlp, inputUrl, tempDir);
       fs.writeFileSync(filePath, out, 'utf8');
       // append to combined
       try {
@@ -171,11 +291,14 @@ async function main() {
     } catch (err) {
       console.error(`Failed to process video: ${String(err.message || err)}`);
       process.exit(1);
+    } finally {
+      try { fs.rmSync(tempDir, { recursive: true, force: true }); } catch {}
     }
     return;
   }
 
   console.log(`Processing playlist: ${baseDirName} (${entries.length} entries)`);
+  const tempDir = path.join(baseDir, '.tmp');
   for (const entry of entries) {
     const id = entry.id || entry.video_id || null;
     const webpage = entry.webpage_url || (id ? `https://youtu.be/${id}` : null);
@@ -185,7 +308,7 @@ async function main() {
     try {
       console.log(` -> ${title}`);
       if (!webpage) throw new Error('No video URL');
-      const out = runCliForVideo(webpage);
+      const out = getTranscriptForVideo(ytDlp, webpage, tempDir);
       fs.writeFileSync(outFile, out, 'utf8');
       // append to combined file
       try {
@@ -198,6 +321,8 @@ async function main() {
       console.error(`   Failed ${title}: ${String(err.message || err)}`);
     }
   }
+  // Clean up temp dir
+  try { fs.rmSync(tempDir, { recursive: true, force: true }); } catch {}
 }
 
 main();
