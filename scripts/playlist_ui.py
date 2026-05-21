@@ -41,6 +41,10 @@ def main():
         default = os.getcwd()
         outdir = prompt('Output base folder (will create outputs/ inside this)', default)
     outdir = os.path.abspath(outdir)
+    if os.path.basename(outdir).lower() == 'outputs':
+        parent = os.path.dirname(outdir)
+        print(f"Note: selected outputs folder as base; using parent: {parent}")
+        outdir = parent
     os.makedirs(outdir, exist_ok=True)
 
     script_dir = Path(__file__).resolve().parent

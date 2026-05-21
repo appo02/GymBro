@@ -154,6 +154,10 @@ class GymBroApp:
                 return
 
         outdir = os.path.abspath(outdir)
+        normalize_note = None
+        if os.path.basename(outdir).lower() == "outputs":
+            outdir = os.path.dirname(outdir)
+            normalize_note = f"Note: selected outputs folder as base; using parent: {outdir}\n"
         os.makedirs(outdir, exist_ok=True)
 
         script_dir = Path(__file__).resolve().parent
@@ -171,6 +175,9 @@ class GymBroApp:
         self.log.configure(state="normal")
         self.log.delete("1.0", tk.END)
         self.log.configure(state="disabled")
+
+        if normalize_note:
+            self._append_log(normalize_note)
 
         self.start_btn.configure(state="disabled")
         self.stop_btn.configure(state="normal")

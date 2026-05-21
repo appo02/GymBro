@@ -7,6 +7,7 @@ import { fileURLToPath } from 'url';
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 const PROJECT_ROOT = path.resolve(__dirname, '..');
+const SSL_CERT_ERR_RE = /CERTIFICATE_VERIFY_FAILED|unable to get local issuer certificate/i;
 
 function findYtDlp() {
   const local = path.join(PROJECT_ROOT, 'yt-dlp.exe');
@@ -18,6 +19,15 @@ function findYtDlp() {
 
 function sanitizeName(name) {
   return name.replace(/[<>:\"/\\|?*]/g, '').trim().replace(/\s+/g, ' ');
+}
+
+function hasSslCertError(text) {
+  return SSL_CERT_ERR_RE.test(String(text || ''));
+}
+
+function withNoCheckCertificates(args) {
+  if (args.includes('--no-check-certificates')) return args;
+  return [...args, '--no-check-certificates'];
 }
 
 function runYtDlpJson(ytDlpPath, args) {
@@ -45,9 +55,32 @@ function runYtDlpJson(ytDlpPath, args) {
   });
 }
 
+async function runYtDlpJsonWithFallback(ytDlpPath, args) {
+  try {
+    return await runYtDlpJson(ytDlpPath, args);
+  } catch (err) {
+    const message = String(err?.message || err);
+    if (!args.includes('--no-check-certificates') && hasSslCertError(message)) {
+      console.warn('yt-dlp SSL certificate check failed. Retrying with --no-check-certificates...');
+      return runYtDlpJson(ytDlpPath, withNoCheckCertificates(args));
+    }
+    throw err;
+  }
+}
+
+function runYtDlpSyncWithFallback(ytDlpPath, args, options) {
+  let res = spawnSync(ytDlpPath, args, options);
+  const output = `${res?.stderr || ''}\n${res?.stdout || ''}\n${res?.error?.message || ''}`;
+  if ((res?.error || res?.status !== 0) && !args.includes('--no-check-certificates') && hasSslCertError(output)) {
+    console.warn('yt-dlp SSL certificate check failed. Retrying with --no-check-certificates...');
+    res = spawnSync(ytDlpPath, withNoCheckCertificates(args), options);
+  }
+  return res;
+}
+
 async function listPlaylistEntries(ytDlpPath, url) {
   // ask yt-dlp for JSON with --flat-playlist so output is manageable
-  const { stdout } = await runYtDlpJson(ytDlpPath, ['-J', '--flat-playlist', url]);
+  const { stdout } = await runYtDlpJsonWithFallback(ytDlpPath, ['-J', '--flat-playlist', url]);
   // try parse as full JSON (has entries) first
   try {
     const parsed = JSON.parse(stdout);
@@ -189,13 +222,17 @@ function extractTranscript(ytDlpPath, videoUrl, tempDir) {
     videoUrl
   ];
 
-  const res = spawnSync(ytDlpPath, args, { encoding: 'utf8', timeout: 120000 });
+  const res = runYtDlpSyncWithFallback(ytDlpPath, args, { encoding: 'utf8', timeout: 120000 });
   if (res.error) throw res.error;
 
   // Find downloaded subtitle files
   const files = fs.readdirSync(tempDir).filter(f => f.startsWith('sub_temp'));
   const json3File = files.find(f => f.endsWith('.json3'));
   const vttFile = files.find(f => f.endsWith('.vtt'));
+
+  if (!json3File && !vttFile && res.status !== 0) {
+    throw new Error(res.stderr || `yt-dlp exited ${res.status}`);
+  }
 
   let segments;
   if (json3File) {
@@ -244,7 +281,11 @@ async function main() {
     process.exit(2);
   }
   // Default output base to project root
-  const outputRoot = outputBase ? path.resolve(outputBase) : PROJECT_ROOT;
+  let outputRoot = outputBase ? path.resolve(outputBase) : PROJECT_ROOT;
+  if (path.basename(outputRoot).toLowerCase() === 'outputs') {
+    console.log(`Output base pointed at an outputs folder; using parent directory instead: ${path.dirname(outputRoot)}`);
+    outputRoot = path.dirname(outputRoot);
+  }
   const ytDlp = findYtDlp();
 
   let info = null;
